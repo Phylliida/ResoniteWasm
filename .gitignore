@@ -1,0 +1,4 @@
+ResoniteWasm/bin
+ResoniteWasm/obj
+*.user
+.vs/
