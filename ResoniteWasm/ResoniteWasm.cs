@@ -11,6 +11,8 @@ using static Elements.Core.FileUtil;
 using Elements.Core;
 using FrooxEngine.ProtoFlux;
 using System.Reflection;
+using System.Runtime;
+using ProtoFlux.Core;
 
 namespace ResoniteEasyFunctionWrapperExampleMod
 {
@@ -36,6 +38,40 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                 value: resoniteType,
                 fieldName: resoniteTypeKey
             );
+        }
+
+        static Type ValueKindToType(ValueKind valueKind)
+        {
+            switch (valueKind)
+            {
+                case ValueKind.AnyRef: throw new ArgumentException("AnyRef not supported");
+                // Extern ref is an external type, like anything besides the stuff listed here
+                case ValueKind.ExternRef: throw new ArgumentException("ExternRef not yet supported");
+                case ValueKind.FuncRef: return typeof(Wasmtime.Function);
+                case ValueKind.Float32: return typeof(System.Single);
+                case ValueKind.Float64: return typeof(System.Double);
+                case ValueKind.Int32: return typeof(System.Int32);
+                case ValueKind.Int64: return typeof(System.Int64);
+                case ValueKind.V128: return typeof(Wasmtime.V128);
+                default: throw new ArgumentException("Unsupported value kind " + valueKind.ToString());
+            }
+        }
+
+        static Object ReadValueBox(ValueKind valueKind, ValueBox valueBox, Store store)
+        {
+            switch (valueKind)
+            {
+                case ValueKind.AnyRef: throw new ArgumentException("AnyRef not supported");
+                // Extern ref is the As<...>
+                case ValueKind.ExternRef: throw new ArgumentException("ExternRef not yet supported");
+                case ValueKind.FuncRef: return valueBox.AsFunction(store);
+                case ValueKind.Float32: return valueBox.AsSingle();
+                case ValueKind.Float64: return valueBox.AsDouble();
+                case ValueKind.Int32: return valueBox.AsInt32();
+                case ValueKind.Int64: return valueBox.AsInt64();
+                case ValueKind.V128: return valueBox.AsV128();
+                default: throw new ArgumentException("Unsupported value kind " + valueKind.ToString());
+            }
         }
 
         static string ValueKindToResoniteTypeString(ValueKind valueKind, out bool isResoniteType, out Type resoniteType)
@@ -536,16 +572,22 @@ namespace ResoniteEasyFunctionWrapperExampleMod
 
         // Todo: allocation functions for vectors, memory, functions, tables, and global refs
 
+        static string FUNCTION_CALL_DYNVAR_SPACE = "FunctionCallerData";
+
+        public static string FunctionCallDynvar(string name)
+        {
+            return FUNCTION_CALL_DYNVAR_SPACE + "/" + name;
+        }
 
         public static Slot GetFunctionCallerTemplateData(Wasmtime.Function function)
         {
-            Slot functionCallerSlot = CreateEmptyInUserspace("FunctionCallerData");
+            Slot functionCallerSlot = CreateEmptyInUserspace(FUNCTION_CALL_DYNVAR_SPACE);
             DynamicVariableSpace space = functionCallerSlot.AttachComponent<DynamicVariableSpace>();
             
             AttachDynvarVar(
                 functionCallerSlot,
                 function.Parameters.Count,
-                "numParameters"
+                FunctionCallDynvar("numParameters")
             );
 
             int i = 0;
@@ -557,13 +599,13 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                 AttachDynvarVar(
                     slotAttachingTo: functionCallerSlot,
                     value: inParam.ToString(),
-                    fieldName: "parameterKind" + i
+                    fieldName: FunctionCallDynvar("parameterKind" + i)
                 );
                 AttachDynvarVar(
                     slotAttachingTo: functionCallerSlot,
                     type: resoniteType,
                     value: resoniteType.GetDefault(),
-                    fieldName: FunctionInfoName("parameter" + i)
+                    fieldName: FunctionCallDynvar("parameter" + i)
                 );
                 i += 1;
             }
@@ -571,7 +613,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
             AttachDynvarVar(
                 functionCallerSlot,
                 function.Results.Count,
-                "numResults"
+                FunctionCallDynvar("numResults")
             );
 
             foreach (ValueKind outParam in function.Results)
@@ -582,28 +624,146 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                 AttachDynvarVar(
                     slotAttachingTo: functionCallerSlot,
                     value: outParam.ToString(),
-                    fieldName: "resultKind" + i
+                    fieldName: FunctionCallDynvar("resultKind" + i)
                 );
                 AttachDynvarVar(
                     slotAttachingTo: functionCallerSlot,
                     type: resoniteType,
                     value: resoniteType.GetDefault(),
-                    fieldName: FunctionInfoName("result" + i)
+                    fieldName: FunctionCallDynvar("result" + i)
                 );
                 i += 1;
             }
 
+            AttachDynvarVar(
+                slotAttachingTo: functionCallerSlot,
+                value: "",
+                fieldName: FunctionCallDynvar("error")
+            );
+
             return functionCallerSlot;
         }
 
+        class CallFunctionException : Exception
+        {
+            public string message;
+            public CallFunctionException(string message)
+            {
+                this.message = message;
+            }
+        }
 
+        static bool TryReadDynvar(DynamicVariableSpace dynvarSpace, string dynvarName, Type dynvarType, out object result)
+        {
+            object[] parameters = new object[] { dynvarName, null };
+            bool didRead = (bool)dynvarSpace.GetType().GetMethod("TryReadValue").MakeGenericMethod(dynvarType).Invoke(dynvarSpace, parameters);
+            result = parameters[1];
+            return didRead;
+        }
 
+        static DynamicVariableWriteResult TryWriteDynvar(DynamicVariableSpace dynvarSpace, string dynvarName, Type dynvarType, object value)
+        {
+            object[] parameters = new object[] { dynvarName, value };
+            DynamicVariableWriteResult writeResult = (DynamicVariableWriteResult)dynvarSpace.GetType().GetMethod("TryWriteValue").MakeGenericMethod(dynvarType).Invoke(dynvarSpace, parameters);
+            return writeResult;
+        }
 
-        // What I'd like is to automatically generate a protoflux node calling the function
-        // However a simpler option is to have a node to make inputs, node to call, node to fetch outputs
-        // Though if I'm already making dynvars, why not just dynvar this instead?
-        // Can make a dynvar with all the input and output values
-        // Then pass that in
+        public static void CallWasmFunction(Wasmtime.Function function, Wasmtime.Store store, Slot functionData, out bool success)
+        {
+            success = false;
+            DynamicVariableSpace space = functionData.GetComponent<DynamicVariableSpace>();
+            if (space == null)
+            {
+                Msg("Could not find dynvar space of output slot " + functionData + " when trying to call wasm function");
+                return;
+            }
+            try
+            {                
+                ValueBox[] parameters = new ValueBox[function.Parameters.Count];
+                var i = 0;
+                foreach (ValueKind param in function.Parameters)
+                {
+                    bool isResoniteType;
+                    Type resoniteType;
+                    ValueKindToResoniteTypeString(param, out isResoniteType, out resoniteType);
+                    object paramValue;
+                    if (TryReadDynvar(
+                        dynvarSpace: space,
+                        dynvarName: "param" + i,
+                        dynvarType: resoniteType,
+                        result: out paramValue))
+                    {
+                        if (!isResoniteType)
+                        {
+                            Type valueKindType = ValueKindToType(param);
+                            Guid guid;
+                            if(paramValue == null || 
+                                !Guid.TryParse((string)paramValue, out guid) || 
+                                !ResoniteEasyFunctionWrapper.ResoniteEasyFunctionWrapper.
+                                globalTypeLookup.TryGet(guid, valueKindType, out paramValue))
+                            {
+                                throw new CallFunctionException("Failed to lookup value kind " + valueKindType + " from param" + i + " with uuid " + paramValue + ", failed to lookup in the uuid -> object table");
+                            }
+                        }
+                        parameters[i] = ValueBox.AsBox(paramValue);
+                    }
+                    else
+                    {
+                        throw new CallFunctionException("Could not read param" + i + " of type " + resoniteType + " from dynvar space");
+                    }
+                    i += 1;
+                }
+
+                var result = function.Invoke(parameters);
+
+                if (result == null && function.Results.Count > 0)
+                {
+                    throw new CallFunctionException("Null function result, but function has " + function.Results.Count + " results expected");
+                }
+
+                if (result != null)
+                {
+                    //ReadOnlySpan<ValueBox> results = result;
+                    
+                    i = 0;
+                    foreach (ValueKind param in function.Results)
+                    {
+                        bool isResoniteType;
+                        Type resoniteType;
+                        ValueKindToResoniteTypeString(param, out isResoniteType, out resoniteType);
+                        //Object value = ReadValueBox(results[i]);
+                        Object value = null;
+                        if (!isResoniteType)
+                        {
+                            // store as string
+                            value = ResoniteEasyFunctionWrapper.ResoniteEasyFunctionWrapper.globalTypeLookup.Add(value);
+                        }
+
+                        DynamicVariableWriteResult writeResult =
+                             TryWriteDynvar(
+                                dynvarSpace: space,
+                                dynvarName: "result" + i,
+                                dynvarType: resoniteType,
+                                value: value
+                             );
+
+                        switch (writeResult)
+                        {
+                            case DynamicVariableWriteResult.Success: break;
+                            case DynamicVariableWriteResult.Failed: throw new CallFunctionException("Failed to write result" + i + " of type " + resoniteType + " to dynvar space");
+                            case DynamicVariableWriteResult.NotFound: throw new CallFunctionException("Not found variable, failed to write result" + i + " of type " + resoniteType + " to dynvar space");
+                        }
+                        i += 1;
+                    }
+                }
+                success = true;
+                space.TryWriteValue<String>("error", "");
+            }
+            catch (CallFunctionException callException)
+            {
+                space.TryWriteValue<String>("error", callException.message);
+            }
+        }
 
         public static async Task<Wasmtime.Module> LoadWasmFile(StaticBinary staticBinary, FileMetadata fileMetadata)
         {
