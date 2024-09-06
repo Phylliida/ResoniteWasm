@@ -20,6 +20,29 @@ namespace ResoniteEasyFunctionWrapperExampleMod
     // Class name can be anything
     public class ExportedWasmFunctions
     {
+        static Type getDynvarType(Type type)
+        {
+            if (type == typeof(System.Type))
+            {
+                return typeof(DynamicTypeVariable);
+            }
+            try
+            {
+                Type valueType = typeof(DynamicValueVariable<>).MakeGenericType(type);
+                if (valueType.IsValidGenericType(validForInstantiation: true))
+                {
+                    return valueType;
+                }
+                else
+                {
+                    return typeof(DynamicReferenceVariable<>).MakeGenericType(type);
+                }
+            }
+            catch (ArgumentException) // happens if invalid type
+            {
+                return typeof(DynamicReferenceVariable<>).MakeGenericType(type);
+            }
+        }
 
         static void AttachValueKindToSlot(ValueKind valueKind, Slot slot, string kindKey, string resoniteTypeKey)
         {
@@ -35,6 +58,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
 
             AttachDynvarVar(
                 slotAttachingTo: slot,
+                type: typeof(System.Type),
                 value: resoniteType,
                 fieldName: resoniteTypeKey
             );
@@ -119,14 +143,11 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                 return null;
             }            
         }
+
         static Component AttachDynvarVar(Slot slotAttachingTo, Type type, Object value, string fieldName)
         {
-            Type attachType = typeof(DynamicValueVariable<>).MakeGenericType(type);
-            if (!attachType.IsValidGenericType(validForInstantiation: true))
-            {
-                attachType = typeof(DynamicReferenceVariable<>).MakeGenericType(type);
-            }
-
+            Msg("attaching var with type " + type);
+            Type attachType = getDynvarType(type);
             Component attachedComponent = slotAttachingTo.AttachComponent(attachType);
             Sync<String> varNameField = (Sync<String>)attachedComponent.GetType().GetField("VariableName").GetValue(attachedComponent);
             varNameField.Value = fieldName;
@@ -574,7 +595,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
 
         static string FUNCTION_CALL_DYNVAR_SPACE = "FunctionCallerData";
 
-        public static string FunctionCallDynvar(string name)
+        static string FunctionCallDynvar(string name)
         {
             return FUNCTION_CALL_DYNVAR_SPACE + "/" + name;
         }
@@ -583,6 +604,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
         {
             Slot functionCallerSlot = CreateEmptyInUserspace(FUNCTION_CALL_DYNVAR_SPACE);
             DynamicVariableSpace space = functionCallerSlot.AttachComponent<DynamicVariableSpace>();
+            space.SpaceName.Value = FUNCTION_CALL_DYNVAR_SPACE;
             
             AttachDynvarVar(
                 functionCallerSlot,
@@ -616,6 +638,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                 FunctionCallDynvar("numResults")
             );
 
+            i = 0;
             foreach (ValueKind outParam in function.Results)
             {
                 bool isResoniteType;
@@ -668,6 +691,16 @@ namespace ResoniteEasyFunctionWrapperExampleMod
             return writeResult;
         }
 
+        public static IAssetProvider<Material> GetFirstMaterial(Slot slot)
+        {
+            SkinnedMeshRenderer meshRenderer = slot.GetComponent<SkinnedMeshRenderer>();
+            if (meshRenderer != null && meshRenderer.Materials != null && meshRenderer.Materials.Count > 0)
+            {
+                return meshRenderer.Materials[0];
+            }
+            return null;
+        }
+
         public static void CallWasmFunction(Wasmtime.Function function, Wasmtime.Store store, Slot functionData, out bool success)
         {
             success = false;
@@ -689,7 +722,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                     object paramValue;
                     if (TryReadDynvar(
                         dynvarSpace: space,
-                        dynvarName: "param" + i,
+                        dynvarName: "parameter" + i,
                         dynvarType: resoniteType,
                         result: out paramValue))
                     {
@@ -705,17 +738,25 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                                 throw new CallFunctionException("Failed to lookup value kind " + valueKindType + " from param" + i + " with uuid " + paramValue + ", failed to lookup in the uuid -> object table");
                             }
                         }
-                        parameters[i] = ValueBox.AsBox(paramValue);
+                        if (isResoniteType)
+                        {
+                            // Nonsense to call the ValueBox a = 3; sorts of implicit constructors
+                            MethodInfo implicitMakeValueBox = typeof(ValueBox).GetMethod("op_Implicit", new Type[] { paramValue.GetType() });
+                            parameters[i] = (ValueBox)implicitMakeValueBox.Invoke(null, new object[] { paramValue } );
+                        }
+                        else
+                        {
+                            parameters[i] = ValueBox.AsBox(paramValue); // this does some funky stuff, but only works for primitives
+                        }
                     }
                     else
                     {
-                        throw new CallFunctionException("Could not read param" + i + " of type " + resoniteType + " from dynvar space");
+                        throw new CallFunctionException("Could not read parameter" + i + " of type " + resoniteType + " from dynvar space");
                     }
                     i += 1;
                 }
 
                 var result = function.Invoke(parameters);
-
                 if (result == null && function.Results.Count > 0)
                 {
                     throw new CallFunctionException("Null function result, but function has " + function.Results.Count + " results expected");
@@ -731,8 +772,16 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                         bool isResoniteType;
                         Type resoniteType;
                         ValueKindToResoniteTypeString(param, out isResoniteType, out resoniteType);
-                        //Object value = ReadValueBox(results[i]);
+                        // It just returns the result directly
                         Object value = null;
+                        if (function.Results.Count == 1)
+                        {
+                            value = result;
+                        }
+                        else
+                        {
+                            // idk yet
+                        }
                         if (!isResoniteType)
                         {
                             // store as string
@@ -803,7 +852,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
         private static ModConfiguration Config; //If you use config settings, this will be where you interface with them.
         private static string harmony_id = "bepis.TessaCoil.ResoniteWasm";
 
-        private static Harmony harmony;
+        //private static Harmony harmony;
 
         public override void OnEngineInit()
         {
