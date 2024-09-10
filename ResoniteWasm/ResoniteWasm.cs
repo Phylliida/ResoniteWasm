@@ -6,6 +6,8 @@ using FrooxEngine;
 using System.Collections.Generic;
 using System;
 using System.Threading.Tasks;
+using Elements.Core;
+using SkyFrost.Base;
 using Wasmtime;
 using static Elements.Core.FileUtil;
 using Elements.Core;
@@ -13,6 +15,13 @@ using FrooxEngine.ProtoFlux;
 using System.Reflection;
 using System.Runtime;
 using ProtoFlux.Core;
+using Assimp;
+using SkyFrost.Base;
+using System.IO;
+using Elements.Assets;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Bson;
+using WasiMinimalPolyfill;
 
 namespace ResoniteEasyFunctionWrapperExampleMod
 {
@@ -500,6 +509,16 @@ namespace ResoniteEasyFunctionWrapperExampleMod
             linker = new Wasmtime.Linker(engine);
         }
 
+        public static WasiMinimalPolyfill.WasiFileSystem CreateFileSystem(Wasmtime.Linker linker, Wasmtime.Store store)
+        {
+            return new WasiFileSystem(engine, linker, store, "C:/Users/yams/Desktop/prog/ResoniteWasm/memfs.wasm");
+        }
+
+        public static Wasmtime.Instance GetFileSystemInstance(WasiMinimalPolyfill.WasiFileSystem fileSystem)
+        {
+            return fileSystem.instance;
+        }
+
         public static void CreateWasmStore(out Wasmtime.Store store)
         {
             store = new Wasmtime.Store(engine);
@@ -507,6 +526,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
 
         public static Wasmtime.Instance InstantiateModule(Wasmtime.Linker linker, Wasmtime.Store store, Wasmtime.Module module)
         {
+            linker.DefineWasi();
             return linker.Instantiate(store, module);
         }
 
@@ -691,7 +711,7 @@ namespace ResoniteEasyFunctionWrapperExampleMod
             return writeResult;
         }
 
-        public static IAssetProvider<Material> GetFirstMaterial(Slot slot)
+        public static IAssetProvider<FrooxEngine.Material> GetFirstMaterial(Slot slot)
         {
             SkinnedMeshRenderer meshRenderer = slot.GetComponent<SkinnedMeshRenderer>();
             if (meshRenderer != null && meshRenderer.Materials != null && meshRenderer.Materials.Count > 0)
@@ -699,6 +719,139 @@ namespace ResoniteEasyFunctionWrapperExampleMod
                 return meshRenderer.Materials[0];
             }
             return null;
+        }
+
+        public static string SerializeToJson(Component component, bool prettyPrint, out bool hasPermissions)
+        {
+            hasPermissions = false;
+            Slot exporter = CreateEmptyInUserspace("ExportObject");
+            ModelExportable modelExportable = exporter.AttachComponent<ModelExportable>();
+            modelExportable.Root.Value = component.Slot.ReferenceID;
+            modelExportable.OnlyComponents.Add(component);
+            IExportable exportable = modelExportable;
+            if (!exporter.ForeachComponentInChildren(((IItemPermissions p) => p.CanSave)))
+            {
+                return null;
+            }
+            hasPermissions = true;
+            /*
+            FrooxEngine.Engine engine = FrooxEngine.Engine.Current;
+            World focusedWorld = engine.WorldManager.FocusedWorld;
+            Record record = RecordHelper.CreateForObject<Record>(
+                component.Slot.Name,
+                focusedWorld.LocalUser.UserID ?? focusedWorld.LocalUser.MachineID,
+                (string)null,
+                (string)null,
+                (string)null);
+            */
+            DataTreeDictionary dataTreeDictionary = new DataTreeDictionary();
+            ReferenceTranslator refTranslator = new ReferenceTranslator();
+            SaveControl saveControl = new SaveControl(FrooxEngine.Engine.Current.WorldManager.FocusedWorld, component, refTranslator, null);
+            saveControl.SaveNonPersistent = true;
+            saveControl.GetType().GetMethod("StartSaving", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(saveControl, null);
+            dataTreeDictionary.Add("VersionNumber", FrooxEngine.Engine.Version.ToString());
+            dataTreeDictionary.Add("FeatureFlags", saveControl.StoreFeatureFlags(FrooxEngine.Engine.Current));
+            DataTreeList dataTreeList = new DataTreeList();
+            dataTreeDictionary.Add("Types", dataTreeList);
+            DataTreeDictionary dataTreeDictionary2 = new DataTreeDictionary();
+            dataTreeDictionary.Add("TypeVersions", dataTreeDictionary2);
+
+            saveControl.SaveType(component.GetType());
+            DataTreeDictionary componentData = (DataTreeDictionary)component.Save(saveControl);
+            saveControl.StoreTypeData(dataTreeList, dataTreeDictionary2);
+            dataTreeDictionary.Add("Component", componentData);
+            saveControl.GetType().GetMethod("FinishSave", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(saveControl, null);
+            
+            //SavedGraph savedGraph = component.Slot.SaveObject(DependencyHandling.BreakAll);
+            
+            string jsonResult;
+            using (MemoryStream memoryStream = new MemoryStream())
+            {
+                StringWriter jsonStringWriter = new StringWriter();
+                JsonTextWriter jsonWriter = new JsonTextWriter(jsonStringWriter);
+                if (prettyPrint)
+                {
+                    jsonWriter.Formatting = Formatting.Indented;
+                    jsonWriter.IndentChar = ' ';
+                    jsonWriter.Indentation = 2;
+                }
+                try
+                {
+                    ((JsonWriter)jsonWriter).CloseOutput = false;
+                    // nonsense to call private Write method
+                    // null for first param is when static
+                    MethodInfo writeMethod = typeof(DataTreeConverter).GetMethod("Write", BindingFlags.NonPublic | BindingFlags.Static);
+                    writeMethod.Invoke(null, new object[] { dataTreeDictionary, (JsonWriter)(object)jsonWriter });
+                }
+                finally
+                {
+                    ((IDisposable)jsonWriter)?.Dispose();
+                }
+                jsonResult = jsonStringWriter.ToString();
+            }
+            return jsonResult;
+        }
+
+        public static Component GetComponentInChildren(Slot slot, Type componentType)
+        {
+            return slot.GetComponentInChildren(componentType);
+        }
+
+        public static void ApplyJson(Component component, string json)
+        {
+            if (json != null && component != null)
+            {
+
+            }
+            DataTreeDictionary dict;
+            using (StringReader stringReader = new StringReader(json))
+            {
+                using (JsonTextReader jsonReader = new JsonTextReader(stringReader))
+                {
+                    MethodInfo readMethod = typeof(DataTreeConverter).GetMethod("Read", BindingFlags.NonPublic | BindingFlags.Static);
+                    dict = (DataTreeDictionary)readMethod.Invoke(null, new object[] { (JsonReader)(object)jsonReader });
+                }
+            }
+            Msg("Got dict");
+            TypeData componentTypeData = new TypeData(component.GetType(), null);
+            DataTreeList typeList = dict.TryGetList("Types");
+            string encodedType = FrooxEngine.Engine.Current.WorldManager.FocusedWorld.Types.EncodeType(component.GetType());
+            Msg("Got type of " + typeList[0].LoadString() + " and encoded type " + encodedType);
+            if (typeList != null &&
+                typeList.Count > 0 &&
+                typeList[0].LoadString() == encodedType)
+            {
+                DataTreeDictionary componentDict = dict.TryGetDictionary("Component");
+                foreach (KeyValuePair<string, DataTreeNode> key in componentDict.Children)
+                {
+                    if (key.Value.GetType() == typeof(DataTreeDictionary))
+                    {
+                        var componentFieldRef = component.GetType().GetField(key.Key);
+                        if (componentFieldRef != null)
+                        {
+                            var componentField = componentFieldRef.GetValue(component);
+                            if (componentField != null &&
+                                componentField.GetType().GetGenericTypeDefinition() == typeof(Sync<>))
+                            {
+                                Type fieldValueType = componentField.GetType().GetGenericArguments()[0];
+                                DataTreeDictionary dataDict = (DataTreeDictionary)key.Value;
+                                // second param is ref which gets passed in like this
+                                object[] refParams = new object[] { "Data", null };
+                                dataDict.GetType().GetMethod("TryExtract")
+                                    .MakeGenericMethod(fieldValueType)
+                                    .Invoke(dataDict, refParams);
+                                var data = refParams[1];
+                                if (data != null && data.GetType() == fieldValueType)
+                                {
+                                    Msg("Copied field " + key.Key + " with value " + data); 
+                                    componentField.GetType().GetProperty("Value").SetValue(componentField, data);
+                                }
+                            }
+                        }
+                            
+                    }
+                }
+            }
         }
 
         public static void CallWasmFunction(Wasmtime.Function function, Wasmtime.Store store, Slot functionData, out bool success)

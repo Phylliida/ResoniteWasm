@@ -34,6 +34,10 @@
     <Reference Include="0Harmony">
       <HintPath>..\0Harmony.dll</HintPath>
     </Reference>
+    <Reference Include="AssimpNet, Version=5.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\AssimpNet.dll</HintPath>
+    </Reference>
     <Reference Include="Elements.Assets">
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\Elements.Assets.dll</HintPath>
     </Reference>
@@ -45,6 +49,14 @@
     </Reference>
     <Reference Include="FrooxEngine">
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\FrooxEngine.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="Newtonsoft.Json.Bson, Version=1.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\Newtonsoft.Json.Bson.dll</HintPath>
     </Reference>
     <Reference Include="ProtoFlux.Core">
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\ProtoFlux.Core.dll</HintPath>
@@ -70,6 +82,10 @@
     <Reference Include="SkyFrost.Base">
       <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\SkyFrost.Base.dll</HintPath>
     </Reference>
+    <Reference Include="SkyFrost.Base.Models, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\Program Files (x86)\Steam\steamapps\common\Resonite\Resonite_Data\Managed\SkyFrost.Base.Models.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Memory, Version=4.0.1.2, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51" />
@@ -82,6 +98,9 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
+    <Reference Include="WasiMinimalPolyfill">
+      <HintPath>..\WasiMinimalPolyfill.dll</HintPath>
+    </Reference>
     <Reference Include="Wasmtime.Dotnet">
       <HintPath>..\Wasmtime.Dotnet.dll</HintPath>
     </Reference>
